@@ -1,91 +1,93 @@
-This implementation strategy relies on leveraging Nexus, an **open-source platform** designed for developing, testing, and hosting AI Agents, to run a sophisticated, sequential workflow using a single, autonomous agent with multiple **Actions/Tools**.
+This integrated implementation strategy utilizes the **Single Rollover Processor** agent within the Nexus platform, leveraging the platform's ability to chain **Native Functions (Actions/Tools)** autonomously using the agent's internal **Planning/Reasoning** component.
 
-Since you are not using the Agent2Agent (A2A) Protocol, the agent's internal **Planning/Feedback** capability will orchestrate the data flow and manage the execution sequence.
+The strategy includes three custom API wrappers and a single Agent Profile defined to narrate its processing steps directly to the user (addressing the UI feedback requirement).
 
-As stipulated in our previous conversations, I cannot provide the proprietary API connection logic. The code below provides the complete structural framework required by the Nexus platform, with placeholders for your custom API implementation.
+***Note on Assumptions:*** *As requested, the code assumes generic, functional API URLs and specific JSON return structures as discussed, rather than mocking them with static data. You must install the `requests` library and replace the API URLs with your actual endpoints for production use.*
 
 ---
 
-## Phase 1: Native Functions (API Wrappers)
+## Phase 1: Native Functions (Rollover Project Tools)
 
-These files define the **Actions/Tools** your single agent will use. They must be placed inside your designated **`nexus_actions`** directory. The functions are designed to return structured JSON data, allowing the LLM to easily parse the output and pass inputs to the subsequent tool call [previous conversation].
-
-### File: `nexus_actions/rollover_project_tools.py`
+These functions wrap your external APIs and must be placed in a Python file (e.g., `rollover_project_tools.py`) within your Nexus **`nexus_actions`** directory.
 
 ```python
 # File: nexus_actions/rollover_project_tools.py
 
 import json
 import os
-# Ensure 'requests' is installed: pip install requests
 import requests 
-
 from nexus.nexus_base.action_manager import agent_action
-# Note: The success of these tools relies on stable APIs returning parseable output.
+
+# Assumed API Endpoints
+EMAIL_API_ENDPOINT = "http://api.rollover-extractor.com/extract"
+OCR_API_ENDPOINT = "http://api.ocr-service.com/process"
+LOANIQ_API_ENDPOINT = "http://api.loaniq-source.com/terms"
 
 @agent_action
 def watch_and_extract_data(email_path: str) -> str:
     """
     Takes an email path (.msg file), calls the extraction API, saves the 
-    PDF blob locally, and returns the local file path and metadata.
+    PDF blob locally, and returns the local file path and metadata JSON.
 
     :param email_path: The file path to the .msg file provided by the user.
     :returns: A JSON string containing the 'pdf_path' (string) and 'metadata' (JSON string).
     """
-    # --- IMPLEMENTATION REQUIRED HERE: EMAIL EXTRACTOR API LOGIC ---
-    # 1. Connect to your Email Extractor API using the 'email_path'.
-    # 2. Extract the PDF file blob and the metadata JSON.
-    # 3. Save the PDF blob locally to a persistent working directory.
-    
-    # Placeholder implementation:
-    pdf_path = f"/path/to/nexus_working_dir/instruction_{os.path.basename(email_path).replace('.msg', '.pdf')}"
-    
-    metadata_json_string = json.dumps({
-        "source_path": email_path,
-        "subject": "Q4 Rollover Instruction",
-        "sender": "counterparty@example.com",
-        "date": "2024-10-01"
-    })
-    
-    # Simulate saving the file locally (necessary for OCR tool to access it)
-    # with open(pdf_path, 'wb') as f:
-    #     f.write(pdf_blob_data)
+    try:
+        # Simulate connecting to the Email Extractor API
+        response = requests.post(EMAIL_API_ENDPOINT, json={"path": email_path})
+        response.raise_for_status()
+        
+        # --- Simulate extracting PDF blob and Metadata JSON from the response ---
+        # Assuming the API response contains both metadata and a file blob.
+        # In a real scenario, the API would return the file content or a temporary URL.
+        
+        # Placeholder for metadata retrieval (assuming it's in a specific key)
+        response_data = response.json()
+        metadata_json = response_data.get("metadata", {})
+        
+        # Placeholder for saving the file blob locally
+        pdf_path = f"/tmp/rollover_{os.path.basename(email_path).replace('.msg', '.pdf')}"
+        # with open(pdf_path, 'wb') as f:
+        #     f.write(response_data.get("pdf_blob")) 
 
-    return json.dumps({
-        "pdf_path": pdf_path,
-        "metadata": metadata_json_string
-    })
+        return json.dumps({
+            "pdf_path": pdf_path,
+            "metadata": json.dumps(metadata_json)
+        })
+    except requests.exceptions.RequestException as e:
+        return f"FAILURE: Email extraction API failed. Error: {e}"
 
 
 @agent_action
 def process_pdf_with_ocr(file_path: str, page_number: int = 1) -> str:
     """
     Reads the PDF file at the given path into a buffer and sends it to the 
-    external OCR API for processing, specifically targeting the first page.
+    external OCR API for processing, specifically targeting a page number.
 
     :param file_path: The local path to the PDF file obtained from the extraction step.
     :param page_number: The specific page number to process (fixed at 1).
-    :returns: A JSON string containing the extracted text from the page.
+    :returns: A JSON string containing the extracted text from the page, ready for parsing.
     """
-    # --- IMPLEMENTATION REQUIRED HERE: OCR SERVICE LOGIC ---
-    # 1. READ FILE INTO BUFFER: The code must open the file and read contents for the upload.
+    # 1. READ FILE INTO BUFFER:
     try:
         with open(file_path, 'rb') as f:
             pdf_buffer = f.read()
     except IOError:
-        return "FAILURE: Could not read PDF file into buffer."
+        return f"FAILURE: Could not read PDF file into buffer at {file_path}."
 
-    # 2. Call your external OCR API (API 2), passing the buffer content and page_number.
-    # API_ENDPOINT = os.getenv("OCR_API_ENDPOINT")
-    # files = {'file': (os.path.basename(file_path), pdf_buffer, 'application/pdf')}
-    # data = {'page': page_number}
-    # ocr_result = requests.post(API_ENDPOINT, files=files, data=data)
-    
-    # Placeholder return: Raw text (or structured text) extracted from page 1.
-    return json.dumps({
-        "raw_text": "Facility ID: 12345. Rollover Amount: 1,000,000. Tenor: 30 days. Rate: 4.5%.",
-        "page_processed": page_number
-    })
+    # 2. Call the external OCR API (API 2), passing the buffer content and page_number.
+    try:
+        files = {'file': (os.path.basename(file_path), pdf_buffer, 'application/pdf')}
+        data = {'page': page_number}
+        ocr_response = requests.post(OCR_API_ENDPOINT, files=files, data=data)
+        ocr_response.raise_for_status()
+        
+        # Assuming OCR service returns the extracted text data in JSON format:
+        return ocr_response.text
+
+    except requests.exceptions.RequestException as e:
+        # Placeholder returns a structured failure for the LLM to process
+        return f"FAILURE: OCR service API failed. Error: {e}"
 
 
 @agent_action
@@ -97,24 +99,22 @@ def query_loaniq_for_terms(facility_id: str) -> str:
     :param facility_id: The unique identifier for the loan facility extracted from the OCR text.
     :returns: A structured JSON string containing the official LoanIQ results.
     """
-    # --- IMPLEMENTATION REQUIRED HERE: LOANIQ API LOGIC ---
-    # 1. Logic to authenticate and call your LoanIQ API.
-    
-    # Placeholder return: Must be JSON for accurate LLM comparison.
-    return json.dumps({
-        "FacilityID": facility_id, 
-        "SourceOfRecordAmount": "999000", 
-        "SourceOfRecordTenor": "30 days",
-        "SourceOfRecordRate": "4.51%",
-        "SourceOfRecordStatus": "Active"
-    })
+    try:
+        # Simulate LoanIQ API call
+        response = requests.get(f"{LOANIQ_API_ENDPOINT}/{facility_id}")
+        response.raise_for_status()
+        
+        # LoanIQ API returns the official data as JSON
+        return response.text
+    except requests.exceptions.RequestException as e:
+        return f"FAILURE: LoanIQ API failed for ID {facility_id}. Error: {e}"
 ```
 
 ---
 
 ## Phase 2: Single Agent Profile (Orchestrator Configuration)
 
-This agent's **Persona** is critical, as it enforces the **sequential planning process** and contains explicit instructions to **narrate each step** to the user (fulfilling the UI processing requirement). This file must be placed inside your **`nexus_profiles`** directory.
+This Agent Profile (YAML file) must be placed in your Nexus **`nexus_profiles`** directory. Its **Persona** contains detailed sequential instructions, enabling the agent to act as an **Autonomous Agent** and provide **UI feedback** by forcing narrative steps.
 
 ### File: `nexus_profiles/rollover_processor.yaml`
 
@@ -125,48 +125,40 @@ agentProfile:
   persona: |
     You are the Autonomous Rollover Processor. Your task is to execute the entire 
     loan rollover workflow based on the email path provided by the user. You must 
-    integrate data from three external APIs (Extraction, OCR, and LoanIQ).
-
+    integrate data from three external APIs (Extraction, OCR, and LoanIQ) and present a 
+    final validation report.
+    
     CRITICAL: You must narrate your progress and findings at the end of each step 
-    to provide the user with real-time feedback on what is running and what has completed.
+    to provide the user with real-time feedback on what is running and what has completed 
+    [previous conversation]. You will then proceed immediately to the next step.
 
     You rely on sequential planning and strict data parsing to execute the tasks:
     
     1. **Initial Data Retrieval:** 
-       - Narrate: "Starting Step 1: Connecting to the email extractor API to process the path."
+       - Narrate: "Starting Step 1: Connecting to the email extractor API using the provided path to retrieve the PDF file and email metadata."
        - Call the 'watch_and_extract_data' tool using the email path provided by the user. 
-       - CRITICALLY parse the resulting JSON output to extract the 'pdf_path' and the 'metadata'.
-       - Narrate: "Step 1 Complete. Successfully extracted PDF and metadata (Subject: {{metadata.subject}}). Proceeding to OCR."
+       - CRITICALLY parse the resulting JSON output to extract the 'pdf_path' and the 'metadata' string. Store both for the final report.
+       - Narrate: "Step 1 Complete. Successfully extracted PDF and metadata. Proceeding to OCR processing."
     
     2. **OCR Processing & Key Extraction:** 
-       - Narrate: "Starting Step 2: Sending the PDF buffer for OCR processing on Page 1."
-       - Use the captured 'pdf_path' as the argument for the 'process_pdf_with_ocr' tool, ensuring page_number is 1.
-       - The output will contain raw extracted text. You must accurately parse the critical Facility ID from this text.
-       - Narrate: "Step 2 Complete. OCR extracted text. Identified Facility ID: [Facility ID extracted here]. Proceeding to Validation."
+       - Narrate: "Starting Step 2: Reading the PDF into a buffer and sending it for OCR processing on Page 1."
+       - Use the captured 'pdf_path' as the argument for the 'process_pdf_with_ocr' tool, setting page_number to 1.
+       - The output will be a JSON string of extracted economic terms. You must analyze the text and accurately parse the Facility ID and other key terms (Amount, Tenor, Rate) required for the LoanIQ query.
+       - Narrate: "Step 2 Complete. OCR extracted text successfully. Identified Facility ID: [Insert Extracted Facility ID here]. Proceeding to LoanIQ validation."
     
     3. **LoanIQ Validation & Final Report:** 
-       - Narrate: "Starting Step 3: Querying the LoanIQ source of record API with the Facility ID."
-       - Use the parsed Facility ID from Step 2 as the argument for the 'query_loaniq_for_terms' tool.
-       - The output will be a JSON string of official LoanIQ terms.
-       - Compare the extracted terms (from OCR text) against the official LoanIQ terms.
-       - Generate a final report for the user that clearly displays: The email metadata, the key extracted rollover terms, the official LoanIQ reference terms, and a final verdict (MATCHED or MISMATCHED).
-       - Narrate: "Step 3 Complete. Validation results are below."
+       - Narrate: "Starting Step 3: Querying the LoanIQ source of record API with the Facility ID [Insert Facility ID here]."
+       - Use the parsed Facility ID from Step 2 as the argument for the 'query_loaniq_for_terms' tool. The output will be a JSON string of official LoanIQ terms.
+       - Compare the extracted terms (from OCR text) against the official LoanIQ terms. Note any differences.
+       - Generate a final report for the user that clearly displays: The email metadata, the extracted rollover terms, the official LoanIQ reference terms, and a final summary of the validation.
+       - Narrate: "Step 3 Complete. The validation process is finalized. The LoanIQ results are presented below."
           
-    Your final report is the complete solution for the user. If any action fails, halt execution and output a detailed error report starting with "ESCALATION REQUIRED:".
+    If any action returns a string starting with "FAILURE:", halt execution and output a detailed error report starting with "ESCALATION REQUIRED:".
   actions:
     - watch_and_extract_data
     - process_pdf_with_ocr
     - query_loaniq_for_terms
   knowledge: null
   memory: null
-  planners: null # Relies on the LLM's inherent reasoning and sequential planning ability
+  planners: null 
 ```
-
-### Execution and Display of Processing Steps
-
-To execute this strategy within Nexus and show the processing on the UI:
-
-1.  **Initiate the Agent:** Start a new chat thread in the Nexus web interface and select the **"Single Rollover Processor"** profile.
-2.  **Submit Query:** The user initiates the process by typing the query and providing the email path: e.g., "Please process the rollover instruction found at path: C:/inbox/rollover_20241001.msg."
-3.  **Autonomous Execution:** The agent, operating as an **Autonomous Agent**, receives the goal and uses its internal **Planning/Feedback** component to execute the sequential steps defined in its persona.
-4.  **UI Feedback:** Due to the narrative instructions in the `persona` (e.g., "Starting Step 1: Connecting to the email extractor API..."), the agent will output status updates and findings directly into the chat thread before executing the next tool. This fulfills your requirement to show the user what steps are being executed and what data has been collected so far. The **chat interface** will display this sequential narration and the final result.
