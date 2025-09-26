@@ -1,62 +1,13 @@
-This integrated implementation strategy utilizes the **Single Rollover Processor** agent within the Nexus platform, leveraging the platform's ability to chain **Native Functions (Actions/Tools)** autonomously using the agent's internal **Planning/Reasoning** component.
-
-The strategy includes three custom API wrappers and a single Agent Profile defined to narrate its processing steps directly to the user (addressing the UI feedback requirement).
-
-***Note on Assumptions:*** *As requested, the code assumes generic, functional API URLs and specific JSON return structures as discussed, rather than mocking them with static data. You must install the `requests` library and replace the API URLs with your actual endpoints for production use.*
-
----
-
-## Phase 1: Native Functions (Rollover Project Tools)
-
-These functions wrap your external APIs and must be placed in a Python file (e.g., `rollover_project_tools.py`) within your Nexus **`nexus_actions`** directory.
-
-```python
-# File: nexus_actions/rollover_project_tools.py
-
 import json
 import os
 import requests 
 from nexus.nexus_base.action_manager import agent_action
 
 # Assumed API Endpoints
-EMAIL_API_ENDPOINT = "http://api.rollover-extractor.com/extract"
 OCR_API_ENDPOINT = "http://api.ocr-service.com/process"
 LOANIQ_API_ENDPOINT = "http://api.loaniq-source.com/terms"
 
-@agent_action
-def watch_and_extract_data(email_path: str) -> str:
-    """
-    Takes an email path (.msg file), calls the extraction API, saves the 
-    PDF blob locally, and returns the local file path and metadata JSON.
-
-    :param email_path: The file path to the .msg file provided by the user.
-    :returns: A JSON string containing the 'pdf_path' (string) and 'metadata' (JSON string).
-    """
-    try:
-        # Simulate connecting to the Email Extractor API
-        response = requests.post(EMAIL_API_ENDPOINT, json={"path": email_path})
-        response.raise_for_status()
-        
-        # --- Simulate extracting PDF blob and Metadata JSON from the response ---
-        # Assuming the API response contains both metadata and a file blob.
-        # In a real scenario, the API would return the file content or a temporary URL.
-        
-        # Placeholder for metadata retrieval (assuming it's in a specific key)
-        response_data = response.json()
-        metadata_json = response_data.get("metadata", {})
-        
-        # Placeholder for saving the file blob locally
-        pdf_path = f"/tmp/rollover_{os.path.basename(email_path).replace('.msg', '.pdf')}"
-        # with open(pdf_path, 'wb') as f:
-        #     f.write(response_data.get("pdf_blob")) 
-
-        return json.dumps({
-            "pdf_path": pdf_path,
-            "metadata": json.dumps(metadata_json)
-        })
-    except requests.exceptions.RequestException as e:
-        return f"FAILURE: Email extraction API failed. Error: {e}"
-
+# NOTE: watch_and_extract_data is REMOVED. The user now provides the PDF path directly.
 
 @agent_action
 def process_pdf_with_ocr(file_path: str, page_number: int = 1) -> str:
@@ -64,18 +15,19 @@ def process_pdf_with_ocr(file_path: str, page_number: int = 1) -> str:
     Reads the PDF file at the given path into a buffer and sends it to the 
     external OCR API for processing, specifically targeting a page number.
 
-    :param file_path: The local path to the PDF file obtained from the extraction step.
+    :param file_path: The local path to the PDF file provided by the user.
     :param page_number: The specific page number to process (fixed at 1).
-    :returns: A JSON string containing the extracted text from the page, ready for parsing.
+    :returns: A JSON string containing the extracted text from the page.
     """
-    # 1. READ FILE INTO BUFFER:
+    # --- IMPLEMENTATION REQUIRED HERE: OCR SERVICE LOGIC ---
+    # 1. READ FILE INTO BUFFER: The code must open the file and read contents for the upload.
     try:
         with open(file_path, 'rb') as f:
-            pdf_buffer = f.read()
+            pdf_buffer = f.read() # File content read into buffer
     except IOError:
         return f"FAILURE: Could not read PDF file into buffer at {file_path}."
 
-    # 2. Call the external OCR API (API 2), passing the buffer content and page_number.
+    # 2. Call your external OCR API (API 2), passing the buffer content and page_number.
     try:
         files = {'file': (os.path.basename(file_path), pdf_buffer, 'application/pdf')}
         data = {'page': page_number}
@@ -86,7 +38,6 @@ def process_pdf_with_ocr(file_path: str, page_number: int = 1) -> str:
         return ocr_response.text
 
     except requests.exceptions.RequestException as e:
-        # Placeholder returns a structured failure for the LLM to process
         return f"FAILURE: OCR service API failed. Error: {e}"
 
 
@@ -108,25 +59,15 @@ def query_loaniq_for_terms(facility_id: str) -> str:
         return response.text
     except requests.exceptions.RequestException as e:
         return f"FAILURE: LoanIQ API failed for ID {facility_id}. Error: {e}"
-```
 
----
 
-## Phase 2: Single Agent Profile (Orchestrator Configuration)
-
-This Agent Profile (YAML file) must be placed in your Nexus **`nexus_profiles`** directory. Its **Persona** contains detailed sequential instructions, enabling the agent to act as an **Autonomous Agent** and provide **UI feedback** by forcing narrative steps.
-
-### File: `nexus_profiles/rollover_processor.yaml`
-
-```yaml
 agentProfile:
   name: "Single Rollover Processor"
   avatar: "🔗"
   persona: |
     You are the Autonomous Rollover Processor. Your task is to execute the entire 
-    loan rollover workflow based on the email path provided by the user. You must 
-    integrate data from three external APIs (Extraction, OCR, and LoanIQ) and present a 
-    final validation report.
+    loan rollover workflow based on the PDF file path provided directly by the user. 
+    You must integrate data from the OCR and LoanIQ APIs and present a final validation report.
     
     CRITICAL: You must narrate your progress and findings at the end of each step 
     to provide the user with real-time feedback on what is running and what has completed 
@@ -134,31 +75,28 @@ agentProfile:
 
     You rely on sequential planning and strict data parsing to execute the tasks:
     
-    1. **Initial Data Retrieval:** 
-       - Narrate: "Starting Step 1: Connecting to the email extractor API using the provided path to retrieve the PDF file and email metadata."
-       - Call the 'watch_and_extract_data' tool using the email path provided by the user. 
-       - CRITICALLY parse the resulting JSON output to extract the 'pdf_path' and the 'metadata' string. Store both for the final report.
-       - Narrate: "Step 1 Complete. Successfully extracted PDF and metadata. Proceeding to OCR processing."
+    1. **OCR Processing (Extraction Phase):** 
+       - Narrate: "Starting Step 1: Receiving PDF path and sending the file buffer for OCR processing on Page 1."
+       - You will assume the user's initial message contains the PDF file path. Use this path as the argument for the 'process_pdf_with_ocr' tool (page_number is 1).
+       - The output will be a JSON string containing extracted terms. You must accurately parse the critical Facility ID and other key economic terms from this output.
+       - Narrate: "Step 1 Complete. OCR extracted text successfully. Identified Facility ID: [Insert Extracted Facility ID here]. Proceeding to LoanIQ Validation."
     
-    2. **OCR Processing & Key Extraction:** 
-       - Narrate: "Starting Step 2: Reading the PDF into a buffer and sending it for OCR processing on Page 1."
-       - Use the captured 'pdf_path' as the argument for the 'process_pdf_with_ocr' tool, setting page_number to 1.
-       - The output will be a JSON string of extracted economic terms. You must analyze the text and accurately parse the Facility ID and other key terms (Amount, Tenor, Rate) required for the LoanIQ query.
-       - Narrate: "Step 2 Complete. OCR extracted text successfully. Identified Facility ID: [Insert Extracted Facility ID here]. Proceeding to LoanIQ validation."
+    2. **LoanIQ Validation & Key Retrieval:** 
+       - Narrate: "Starting Step 2: Querying the LoanIQ source of record API with the Facility ID [Insert Facility ID here]."
+       - Use the parsed Facility ID from Step 1 as the argument for the 'query_loaniq_for_terms' tool.
+       - The output will be a JSON string of official LoanIQ terms.
+       - Narrate: "Step 2 Complete. Official LoanIQ results retrieved."
     
-    3. **LoanIQ Validation & Final Report:** 
-       - Narrate: "Starting Step 3: Querying the LoanIQ source of record API with the Facility ID [Insert Facility ID here]."
-       - Use the parsed Facility ID from Step 2 as the argument for the 'query_loaniq_for_terms' tool. The output will be a JSON string of official LoanIQ terms.
-       - Compare the extracted terms (from OCR text) against the official LoanIQ terms. Note any differences.
-       - Generate a final report for the user that clearly displays: The email metadata, the extracted rollover terms, the official LoanIQ reference terms, and a final summary of the validation.
+    3. **Final Report & Presentation:** 
+       - Narrate: "Starting Step 3: Comparing terms and generating the final report."
+       - Compare the extracted terms (from OCR text) against the official LoanIQ terms (Step 2). Note any differences.
+       - Generate a final report for the user that clearly displays: The extracted rollover terms, the official LoanIQ reference terms, and a final summary of the validation.
        - Narrate: "Step 3 Complete. The validation process is finalized. The LoanIQ results are presented below."
           
-    If any action returns a string starting with "FAILURE:", halt execution and output a detailed error report starting with "ESCALATION REQUIRED:".
+    Your final report is the complete solution for the user. If any action returns a string starting with "FAILURE:", halt execution and output a detailed error report starting with "ESCALATION REQUIRED:".
   actions:
-    - watch_and_extract_data
     - process_pdf_with_ocr
     - query_loaniq_for_terms
   knowledge: null
   memory: null
-  planners: null 
-```
+  planners: null # Relies on the LLM's inherent reasoning and sequential planning ability
