@@ -1,19 +1,12 @@
-The tools are now split into a local Python utility method (Email Handler) and two external API wrappers (OCR and LoanIQ). These must be placed within your Nexus nexus_actions directory.
-1. Local Python Email Utility ()
-This method handles the .msg file reading and PDF validation locally, without calling an external API.
-# File: nexus_actions/local_email_handler.py
-import json
 import os
-# NOTE: You will need to install and import libraries capable of reading .msg files 
-# (e.g., 'extract_msg', 'pypff', or specific Outlook libraries).
-from nexus.nexus_base.action_manager import agent_action
+import json
+import win32com.client
 
 @agent_action
 def process_local_email(email_path: str) -> str:
     """
     Reads a local .msg file, extracts mail body, subject, and saves attached PDFs.
     Performs initial validation: stops if no PDF is found.
-
     :param email_path: The local file path to the .msg file provided by the user.
     :returns: A JSON string containing metadata and a list of local PDF paths, or FAILURE.
     """
@@ -22,13 +15,47 @@ def process_local_email(email_path: str) -> str:
     # 2. Extract subject and mail body.
     # 3. Extract all attachments.
     
-    # Placeholder for extracted data:
-    extracted_data = {
-        "subject": "Rollover Instruction 12345",
-        "mail_body": "Please process the rollover for facility 12345...",
-        "attachments": ["/path/to/working_dir/instruction_1.pdf", 
-                        "/path/to/working_dir/memo.pdf"] # List of locally saved PDF paths
-    }
+    try:
+        # Validate input file path
+        if not os.path.exists(email_path):
+            return json.dumps({"status": "STOP", "reason": f"Email file not found: {email_path}"})
+        
+        if not email_path.lower().endswith('.msg'):
+            return json.dumps({"status": "STOP", "reason": "File is not a .msg file"})
+        
+        # Create working directory for attachments
+        working_dir = os.path.join(os.path.dirname(email_path), "extracted_attachments")
+        os.makedirs(working_dir, exist_ok=True)
+        
+        # Use win32com.client to process .msg file
+        outlook = win32com.client.Dispatch("Outlook.Application")
+        namespace = outlook.GetNamespace("MAPI")
+        
+        # Open the .msg file
+        msg = outlook.CreateItemFromTemplate(email_path)
+        
+        subject = msg.Subject or ""
+        body = msg.Body or ""
+        
+        # Extract attachments
+        attachment_paths = []
+        for i in range(msg.Attachments.Count):
+            attachment = msg.Attachments.Item(i + 1)
+            filename = attachment.FileName
+            
+            # Save attachment to working directory
+            attachment_path = os.path.join(working_dir, filename)
+            attachment.SaveAsFile(attachment_path)
+            attachment_paths.append(attachment_path)
+        
+        extracted_data = {
+            "subject": subject,
+            "mail_body": body,
+            "attachments": attachment_paths
+        }
+    
+    except Exception as e:
+        return json.dumps({"status": "STOP", "reason": f"Error processing email: {str(e)}"})
     
     pdf_paths = [path for path in extracted_data['attachments'] if path.lower().endswith('.pdf')]
     
@@ -44,125 +71,3 @@ def process_local_email(email_path: str) -> str:
         },
         "pdf_paths": pdf_paths
     })
-2. API Wrappers ()
-These wrappers handle the external OCR and LoanIQ services.
-# File: nexus_actions/rollover_api_tools.py
-import json
-import os
-import requests 
-from nexus.nexus_base.action_manager import agent_action
-
-OCR_API_ENDPOINT = "http://api.ocr-service.com/process"
-LOANIQ_API_ENDPOINT = "http://api.loaniq-source.com/query"
-
-@agent_action
-def process_pdf_with_ocr(file_path: str, page_number: int = 1) -> str:
-    """
-    Reads the PDF file at the given path into a buffer and sends it to the 
-    external OCR API for processing (Page 1 only).
-
-    :param file_path: The local path to the PDF file.
-    :param page_number: The specific page number to process (fixed at 1).
-    :returns: A JSON string containing the extracted raw text from the page.
-    """
-    # 1. READ FILE INTO BUFFER:
-    try:
-        with open(file_path, 'rb') as f:
-            pdf_buffer = f.read() 
-    except IOError:
-        return f"FAILURE: Could not read PDF file into buffer at {file_path}."
-
-    # 2. Call your external OCR API (API 2).
-    try:
-        files = {'file': (os.path.basename(file_path), pdf_buffer, 'application/pdf')}
-        data = {'page': page_number}
-        ocr_response = requests.post(OCR_API_ENDPOINT, files=files, data=data)
-        ocr_response.raise_for_status()
-        
-        # Assuming OCR service returns the extracted text data in JSON format:
-        return ocr_response.text
-
-    except requests.exceptions.RequestException as e:
-        return f"FAILURE: OCR service API failed. Error: {e}"
-
-
-@agent_action
-def query_loaniq_for_terms(facility_id: str) -> str:
-    """
-    Queries the LoanIQ system (API) using the Facility ID. LoanIQ returns a list 
-    of possible matching loan records.
-
-    :param facility_id: The unique identifier for the loan facility extracted from the OCR text.
-    :returns: A structured JSON string containing a LIST of official LoanIQ results.
-    """
-    try:
-        # Simulate LoanIQ API call, expecting a list of possible matches
-        response = requests.get(f"{LOANIQ_API_ENDPOINT}/{facility_id}")
-        response.raise_for_status()
-        
-        # LoanIQ API returns the official data as a list of JSON objects
-        # The agent must then calculate percentage match against each item in the list
-        return response.text
-    except requests.exceptions.RequestException as e:
-        return f"FAILURE: LoanIQ API failed for ID {facility_id}. Error: {e}"
-
---------------------------------------------------------------------------------
-Phase 2: Single Agent Profile (Orchestrator Configuration)
-The single agent's Persona must now handle reading the local email, validating rollover content, looping through multiple PDFs (if present), extracting specific terms, and calculating percentage matching across a list of LoanIQ results. This relies heavily on the LLM's sequential planning ability.
-File: 
-agentProfile:
-  name: "Single Rollover Processor V2"
-  avatar: "🔗"
-  persona: |
-    You are the Autonomous Rollover Processor. Your task is to execute the entire 
-    loan rollover workflow based on the email path provided by the user. You must 
-    integrate data from the local email handler, OCR service, and LoanIQ API.
-
-    CRITICAL: You must narrate your progress and findings at the end of each step 
-    to provide the user with real-time feedback on what is running and what has completed 
-    [previous conversation]. If validation fails, you MUST stop immediately.
-
-    The target fields for extraction and validation are: ["facility_id", "amount", "tenor_days", "rate", "start_date"].
-
-    You rely on strict sequential planning and complex data processing:
-    
-    1. **Email Processing (Local):** 
-       - Narrate: "Starting Step 1: Reading local .msg file and extracting attachments."
-       - Call the 'process_local_email' tool using the email path provided by the user. 
-       - CHECK: If the tool returns a status of "STOP" (e.g., no PDF found), terminate the entire process and report the reason.
-       - Parse the successful output to get the list of 'pdf_paths' and 'metadata'.
-       - Narrate: "Step 1 Complete. Metadata extracted. Found [Count of PDFs] PDFs. Proceeding to OCR analysis."
-    
-    2. **OCR & Rollover Validation:**
-       - NARRATIVE: You must iterate through ALL extracted 'pdf_paths' and run 'process_pdf_with_ocr' (using page 1).
-       - FOR EACH PDF:
-         a. Call 'process_pdf_with_ocr' with the file path.
-         b. Analyze the OCR raw text output to determine if the document is a "Rollover Instruction" (e.g., searching for keywords like 'Rollover', 'Extension', 'Amendment', etc.).
-         c. VALIDATION CHECK: If the document is NOT a rollover instruction, report that file is irrelevant, and continue to the next PDF.
-       - If no rollover PDF is identified after checking all attachments, terminate the process and report: "STOP: No relevant Rollover Instruction PDF found."
-       - If a rollover PDF is found, capture the raw text from that PDF and proceed to Step 3.
-    
-    3. **Term Extraction & LoanIQ Query:**
-       - Narrate: "Starting Step 3: Extracting critical economic terms from the verified Rollover PDF text."
-       - From the verified OCR text, accurately extract the required fields: ["facility_id", "amount", "tenor_days", "rate", "start_date"]. If a field is missing, note it.
-       - CHECK: If the "facility_id" is missing, stop the process and report the missing field.
-       - Call the 'query_loaniq_for_terms' tool using the extracted Facility ID. The API will return a list of results.
-       - Narrate: "Step 3 Complete. Retrieved [Count of results] possible matches from LoanIQ."
-    
-    4. **Percentage Matching & Final Report:**
-       - Narrate: "Starting Step 4: Calculating percentage match for each LoanIQ result."
-       - You must compare the extracted terms (Step 3) against EACH loan record returned in the LoanIQ list.
-       - For each LoanIQ result, calculate a numerical **percentage match score** based on the accuracy of the extracted terms (Amount, Tenor, Rate, etc.).
-       - Generate a final report for the user that clearly displays:
-         - The email metadata (subject, mail body).
-         - The extracted rollover terms.
-         - A list of ALL LoanIQ results, with the corresponding **Percentage Match Score** prominently displayed for each one.
-          
-    If any action returns a string starting with "FAILURE:", halt execution and output a detailed error report.
-  actions:
-    - process_local_email
-    - process_pdf_with_ocr
-    - query_loaniq_for_terms
-  knowledge: null
-  memory: null
-  planners: null 
