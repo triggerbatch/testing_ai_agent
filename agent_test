@@ -1,6 +1,4 @@
-import os
-import json
-import win32com.client
+import extract_msg
 
 @agent_action
 def process_local_email(email_path: str) -> str:
@@ -27,33 +25,59 @@ def process_local_email(email_path: str) -> str:
         working_dir = os.path.join(os.path.dirname(email_path), "extracted_attachments")
         os.makedirs(working_dir, exist_ok=True)
         
-        # Use win32com.client to process .msg file
-        outlook = win32com.client.Dispatch("Outlook.Application")
-        namespace = outlook.GetNamespace("MAPI")
+        # Read and parse the .msg file using extract-msg
+        msg = extract_msg.Message(email_path)
         
-        # Open the .msg file
-        msg = outlook.CreateItemFromTemplate(email_path)
+        # Extract subject and body
+        subject = msg.subject or ""
+        body = msg.body or ""
         
-        subject = msg.Subject or ""
-        body = msg.Body or ""
-        
-        # Extract attachments
+        # Extract and save attachments
         attachment_paths = []
-        for i in range(msg.Attachments.Count):
-            attachment = msg.Attachments.Item(i + 1)
-            filename = attachment.FileName
-            
-            # Save attachment to working directory
-            attachment_path = os.path.join(working_dir, filename)
-            attachment.SaveAsFile(attachment_path)
-            attachment_paths.append(attachment_path)
+        if msg.attachments:
+            for i, attachment in enumerate(msg.attachments):
+                # Get filename
+                if hasattr(attachment, 'longFilename') and attachment.longFilename:
+                    filename = attachment.longFilename
+                elif hasattr(attachment, 'shortFilename') and attachment.shortFilename:
+                    filename = attachment.shortFilename
+                else:
+                    # Generate filename based on attachment type
+                    extension = ""
+                    if hasattr(attachment, 'data') and len(attachment.data) > 0:
+                        # Try to detect file type from first few bytes
+                        data_start = attachment.data[:4]
+                        if data_start.startswith(b'%PDF'):
+                            extension = ".pdf"
+                        elif data_start.startswith(b'\x89PNG'):
+                            extension = ".png"
+                        elif data_start.startswith(b'\xff\xd8\xff'):
+                            extension = ".jpg"
+                        elif data_start.startswith(b'PK'):
+                            extension = ".zip"
+                    filename = f"attachment_{i}{extension}"
+                
+                # Save attachment to working directory
+                attachment_path = os.path.join(working_dir, filename)
+                
+                try:
+                    with open(attachment_path, 'wb') as f:
+                        f.write(attachment.data)
+                    attachment_paths.append(attachment_path)
+                except Exception as e:
+                    # Continue processing other attachments if one fails
+                    print(f"Warning: Failed to save attachment {filename}: {e}")
+                    continue
+        
+        # Close the message to free resources
+        msg.close()
         
         extracted_data = {
             "subject": subject,
             "mail_body": body,
             "attachments": attachment_paths
         }
-    
+        
     except Exception as e:
         return json.dumps({"status": "STOP", "reason": f"Error processing email: {str(e)}"})
     
